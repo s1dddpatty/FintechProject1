@@ -20,11 +20,16 @@ class Settings(BaseSettings):
     project_version: str = "0.1.0"
     
     # Database (secrets from .env)
+    db_driver: str = "postgresql+psycopg2"
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "fintech_db"
     db_user: str = "admin"
     db_password: str = "secret"
+    
+    # SQLite overrides
+    use_sqlite: bool = False
+    sqlite_path: str = "sqlite:///./fintech.db"
     
     # Logging
     log_level: str = "INFO"
@@ -36,6 +41,13 @@ class Settings(BaseSettings):
         extra="ignore"
     )
     
+    @property
+    def database_url(self) -> str:
+        """Returns the appropriate database URL based on configuration."""
+        if self.use_sqlite:
+            return self.sqlite_path
+        return f"{self.db_driver}://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+
     @classmethod
     def load_all_settings(cls):
         yaml_data = load_yaml_settings()

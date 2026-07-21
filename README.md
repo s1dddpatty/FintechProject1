@@ -58,10 +58,25 @@ FintechProject1/
    ```bash
    pip install -r requirements.txt
    ```
-4. **Configure environment**:
-   Copy `.env.example` to `.env` and fill in your details.
+4. **Configure Database & Environment**:
+   Copy `.env.example` to `.env` and configure your local PostgreSQL credentials:
    ```bash
    cp .env.example .env
+   ```
+   **Local PostgreSQL Setup**: 
+   Ensure PostgreSQL is running locally on port 5432.
+   Create the database and user matching your `.env`:
+   ```sql
+   CREATE DATABASE fintech_db;
+   CREATE USER admin WITH PASSWORD 'secret';
+   GRANT ALL PRIVILEGES ON DATABASE fintech_db TO admin;
+   ```
+   *Note: For lightweight testing without PostgreSQL, set `USE_SQLITE=True` in your `.env`.*
+
+5. **Verify Connectivity**:
+   Run the database health check to verify your configuration:
+   ```python
+   python -c "from src.db.health import check_database_health; print(check_database_health())"
    ```
 
 ## Development Principles
