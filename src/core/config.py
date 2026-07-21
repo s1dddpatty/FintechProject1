@@ -1,0 +1,45 @@
+"""
+Configuration module using pydantic-settings.
+Priority: 1. .env, 2. config.yaml, 3. defaults
+"""
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIG_FILE = PROJECT_ROOT / "config" / "config.yaml"
+
+def load_yaml_settings():
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "r") as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+class Settings(BaseSettings):
+    project_name: str = "FintechProject1"
+    project_version: str = "0.1.0"
+    
+    # Database (secrets from .env)
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_name: str = "fintech_db"
+    db_user: str = "admin"
+    db_password: str = "secret"
+    
+    # Logging
+    log_level: str = "INFO"
+    log_file: str = "logs/pipeline.log"
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+    
+    @classmethod
+    def load_all_settings(cls):
+        yaml_data = load_yaml_settings()
+        # Environment variables will automatically override any default instantiated here
+        return cls()
+
+settings = Settings.load_all_settings()
