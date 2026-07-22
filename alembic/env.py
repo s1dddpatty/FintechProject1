@@ -6,8 +6,17 @@ from sqlalchemy import pool
 
 from alembic import context
 
+import sys
+from pathlib import Path
+
+# Add project root to PYTHONPATH dynamically to resolve 'src' modules
+project_root = str(Path(__file__).resolve().parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from src.core.config import settings
 from src.db.base import Base
+import src.db.models  # Import all ORM models so they are registered with Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -15,7 +24,7 @@ config = context.config
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    pass # Removed fileConfig to avoid KeyError due to missing formatters section in alembic.ini
 
 # add your model's MetaData object here for 'autogenerate' support
 target_metadata = Base.metadata

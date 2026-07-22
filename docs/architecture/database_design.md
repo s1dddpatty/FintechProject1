@@ -5,8 +5,7 @@ This document details the schema, entities, and scalability design for the Finte
 ## 1. Business Entities
 
 The platform revolves around several core entities:
-*   **Customer**: Represents individual borrowers. Exists to group loans and track lifetime value and demographic trends.
-*   **Loan**: The primary credit asset. Exists to track individual credit exposure, terms, and risk assignment.
+*   **Loan**: The primary credit asset and point-in-time Applicant Snapshot.
 *   **Payment**: Financial transactions towards a loan. Exists to calculate actual ROI and monitor repayment behavior.
 *   **Marketing Campaign**: Targeted acquisition efforts. Exists to calculate Customer Acquisition Cost (CAC) and campaign ROI.
 *   **Prediction**: Output of ML inference. Exists to preserve historical point-in-time risk scores for audit and model drift analysis.
@@ -15,23 +14,13 @@ The platform revolves around several core entities:
 
 ## 2. Schema Design
 
-### Table: `customers`
-*   **Purpose**: Stores demographic and static borrower information.
-*   **Primary Key**: `member_id`
-*   **Foreign Keys**: `campaign_id` (Nullable, points to `marketing_campaigns`)
-*   **Key Columns**: `annual_inc`, `emp_length`, `home_ownership`, `addr_state`, `fico_range_low`, `fico_range_high`.
-*   **Relationships**: 1:N with `loans`.
-*   **Indexes**: `member_id` (PK), `addr_state` (filtering).
-*   **Expected Volume**: ~2M rows.
-*   **Update Frequency**: Low (Updated upon new application or periodic credit refresh).
-
 ### Table: `loans`
-*   **Purpose**: Stores origination details, loan terms, and current status.
+*   **Purpose**: Stores origination details, loan terms, current status, and the Applicant Snapshot.
 *   **Primary Key**: `id`
-*   **Foreign Keys**: `member_id` (points to `customers`)
-*   **Key Columns**: `loan_amnt`, `funded_amnt`, `term`, `int_rate`, `installment`, `grade`, `issue_d`, `loan_status`, `dti`.
-*   **Relationships**: N:1 with `customers`, 1:N with `payments`, 1:N with `predictions`.
-*   **Indexes**: `id` (PK), `member_id` (FK), `issue_d` (Time-series queries), `loan_status` (Filtering).
+*   **Foreign Keys**: `campaign_id` (Nullable, points to `marketing_campaigns`)
+*   **Key Columns**: `loan_amnt`, `term`, `int_rate`, `grade`, `loan_status`, `annual_inc`, `home_ownership`, `addr_state`, `fico_range_low`, `fico_range_high`.
+*   **Relationships**: 1:N with `payments`, 1:N with `predictions`.
+*   **Indexes**: `id` (PK), `issue_d` (Time-series queries), `loan_status` (Filtering).
 *   **Expected Volume**: ~2.5M rows.
 *   **Update Frequency**: Medium (Status and outstanding balances updated monthly).
 
@@ -50,7 +39,7 @@ The platform revolves around several core entities:
 *   **Primary Key**: `campaign_id`
 *   **Foreign Keys**: None.
 *   **Key Columns**: `channel`, `spend`, `target_segment`, `start_date`, `end_date`.
-*   **Relationships**: 1:N with `customers`.
+*   **Relationships**: 1:N with `loans`.
 *   **Indexes**: `campaign_id` (PK).
 *   **Expected Volume**: ~100s to 1,000s rows.
 *   **Update Frequency**: Very Low (Inserted when new campaigns launch).
@@ -96,7 +85,7 @@ As the dataset grows (especially the `payments` table), the PostgreSQL architect
 *   **Partitioning**: The `payments` and `predictions` tables should be partition-by-range on `payment_date` and `inference_timestamp` (e.g., partitioned monthly). This allows fast querying of recent data and efficient dropping/archiving of old data.
 *   **Indexes**: B-Tree indexes on all Foreign Keys to prevent slow JOINs. BRIN (Block Range Indexes) on partitioned time-series columns (`payment_date`) to minimize memory usage on massive tables.
 *   **Archiving**: Data older than 7 years (regulatory threshold) will be moved to cold storage (e.g., Parquet in S3) and removed from live PostgreSQL partitions.
-*   **Incremental Loads**: The ETL pipeline will use Upserts (`INSERT ON CONFLICT`) for `loans` and `customers`, but strictly Append-Only logic for `payments` and `predictions` to ensure high throughput.
+*   **Incremental Loads**: The ETL pipeline will use Upserts (`INSERT ON CONFLICT`) for `loans`, but strictly Append-Only logic for `payments` and `predictions` to ensure high throughput.
 *   **Batch Processing**: Analytical views will heavily rely on materialized views updated nightly during off-peak hours, rather than computing aggregations on the fly for dashboards.
 
 ## 5. Implementation Notes

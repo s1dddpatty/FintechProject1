@@ -1,11 +1,13 @@
 """
 SQLAlchemy session and engine management.
 """
+
 from contextlib import contextmanager
 from typing import Generator
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.config import settings
 from src.core.logging import get_logger
@@ -22,15 +24,12 @@ logger.info(f"Initializing database engine with driver: {'sqlite' if settings.us
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,  # Enables connection health checks
-    **engine_kwargs
+    **engine_kwargs,
 )
 
 # Create Session Factory
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:

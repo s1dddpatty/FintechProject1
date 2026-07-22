@@ -1,0 +1,2 @@
+loan_amnt,int_rate,term,grade,issue_d,loan_status,annual_inc,home_ownership,addr_state,fico_range_low,fico_range_high
+15000.0,7.35,36 months,A,2018-02-01,Current,48000.0,RENT,CA,710.0,714.0

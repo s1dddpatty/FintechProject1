@@ -1,0 +1,53 @@
+{
+  "model_name": "XGBoost",
+  "version": "1.0",
+  "timestamp": "2026-07-21T23:29:17.263577",
+  "operating_threshold": 0.2,
+  "threshold_selection_metric": "F1-Score",
+  "algorithm": "XGBoost",
+  "trained_on_rows": 104414,
+  "training_timestamp": "2026-07-21T23:29:17.250254",
+  "roc_auc": 0.7017888167452638,
+  "precision": 0.3092433407619654,
+  "recall": 0.6521933751119069,
+  "f1": 0.4195522280613347,
+  "feature_count": 70,
+  "class_distribution": {
+    "0": 83552,
+    "1": 20862
+  },
+  "dataset_mode": "production",
+  "model_comparison": [
+    {
+      "name": "Random Forest",
+      "roc_auc": 0.6706447793276611,
+      "f1": 0.400028441410694,
+      "recall": 0.6295881826320502,
+      "operating_threshold": 0.2
+    },
+    {
+      "name": "XGBoost",
+      "roc_auc": 0.7017888167452638,
+      "f1": 0.4195522280613347,
+      "recall": 0.6521933751119069,
+      "operating_threshold": 0.2
+    }
+  ],
+  "metrics": {
+    "accuracy": 0.6394329666398354,
+    "precision": 0.3092433407619654,
+    "recall": 0.6521933751119069,
+    "f1": 0.4195522280613347,
+    "roc_auc": 0.7017888167452638,
+    "confusion_matrix": [
+      [
+        11385,
+        6509
+      ],
+      [
+        1554,
+        2914
+      ]
+    ]
+  }
+}
