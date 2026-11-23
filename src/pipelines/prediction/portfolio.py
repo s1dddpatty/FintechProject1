@@ -146,9 +146,19 @@ class PortfolioScoringService:
             except (ValueError, TypeError):
                 return None
 
-        for num_col in ["loan_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high"]:
+        for num_col in ["loan_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high", "dti", "revol_util"]:
             if num_col in df.columns:
                 df[num_col] = df[num_col].apply(_clean_num)
+
+        if "emp_length" in df.columns:
+            def _clean_emp(val):
+                if pd.isna(val): return 5.0
+                if isinstance(val, (int, float)): return float(val)
+                s = str(val).strip()
+                import re
+                m = re.search(r'(\d+)', s)
+                return float(m.group(1)) if m else 5.0
+            df["emp_length"] = df["emp_length"].apply(_clean_emp)
 
         # Standardize term strings
         if "term" in df.columns:
@@ -164,6 +174,7 @@ class PortfolioScoringService:
             "loan_amnt": 10000.0,
             "int_rate": 12.5,
             "annual_inc": 60000.0,
+            "emp_length": 5.0,
             "fico_range_low": 700.0,
             "fico_range_high": 704.0,
             "term": " 36 months",
