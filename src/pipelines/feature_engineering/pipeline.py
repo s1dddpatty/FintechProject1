@@ -9,6 +9,7 @@ class TermToIntegerTransformer(BaseEstimator, TransformerMixin):
     """Custom transformer to parse ' 36 months' to 36."""
     
     def fit(self, X, y=None):
+        self.is_fitted_ = True
         return self
         
     def transform(self, X):
@@ -21,10 +22,11 @@ class TermToIntegerTransformer(BaseEstimator, TransformerMixin):
 class DropColumnsTransformer(BaseEstimator, TransformerMixin):
     """Custom transformer to drop columns not needed for modeling."""
     
-    def __init__(self, cols_to_drop):
-        self.cols_to_drop = cols_to_drop
+    def __init__(self, cols_to_drop=None):
+        self.cols_to_drop = cols_to_drop or []
         
     def fit(self, X, y=None):
+        self.is_fitted_ = True
         return self
         
     def transform(self, X):
@@ -35,15 +37,21 @@ class DropColumnsTransformer(BaseEstimator, TransformerMixin):
         return X_out
 
 def build_preprocessing_pipeline() -> Pipeline:
-    """Builds the main scikit-learn preprocessing pipeline."""
-    
+    """
+    Builds the production mathematical scikit-learn preprocessing pipeline (Pipeline 2)
+    ingesting the 21-column canonical credit dataset.
+    """
     numeric_features = [
-        "loan_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high", "term"
+        "loan_amnt", "term", "int_rate", "installment", "annual_inc", "emp_length",
+        "fico_score", "fico_range_low", "fico_range_high", "dti", "revol_util",
+        "credit_history_months", "installment_to_income", "loan_to_income", "grade_ordinal"
     ]
+    
     categorical_features = [
-        "grade", "home_ownership", "addr_state"
+        "home_ownership", "purpose", "addr_state"
     ]
-    columns_to_drop = ["issue_d"]
+    
+    columns_to_drop = ["id", "loan_status", "grade", "issue_d"]
 
     # Pre-cleaning steps
     preprocessor_custom = Pipeline([
@@ -68,7 +76,7 @@ def build_preprocessing_pipeline() -> Pipeline:
             ("num", numeric_transformer, numeric_features),
             ("cat", categorical_transformer, categorical_features),
         ],
-        remainder="drop" # Drop any other columns that weren't explicitly transformed
+        remainder="drop" # Drop any other non-canonical columns
     )
 
     # Full Pipeline

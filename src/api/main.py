@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
 from src.api.exceptions import fintech_exception_handler, global_exception_handler
-from src.api.routers import analytics, ingestion, models, prediction, ml, admin
+from src.api.routers import analytics, ingestion, models, prediction, ml, admin, pipeline
 from src.core.exceptions import FintechBaseException
 from src.core.logging import get_logger
 from src.observability.health import router as health_router
@@ -16,6 +16,8 @@ app = FastAPI(
     title="Fintech Analytics Platform API",
     description="Production REST Gateway Orchestrating the Lending Risk and Analytics Pipelines",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 # Application Middlewares
@@ -41,6 +43,7 @@ app.include_router(models.router)
 app.include_router(prediction.router)
 app.include_router(ml.router)
 app.include_router(admin.router)
+app.include_router(pipeline.router)
 
 
 @app.on_event("startup")

@@ -14,10 +14,12 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
-  Wallet
+  Wallet,
+  Sparkles
 } from 'lucide-react';
 
 const navItems = [
+  { name: 'Data Pipeline & Audit', href: '/pipeline', icon: Sparkles },
   { name: 'Model Development', href: '/development', icon: Database },
   { name: 'Portfolio Scoring', href: '/scoring', icon: BrainCircuit },
 ];

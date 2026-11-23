@@ -54,8 +54,19 @@ frontend/.next/
 .mypy_cache/
 .ruff_cache/
 
-# Runtime artifacts
+# Runtime artifacts & local databases
 artifacts/temp_sessions/
+artifacts/pipeline_sessions/
+fintech.db
+*.db
+dirty_sample.csv
+bootstrap_*.ps1
+benchmarks/raw_lending_club_150k.csv
+benchmarks/stress_dataset_*.csv
+benchmarks/dataset_100000.csv
+benchmarks/dataset_50000.csv
+benchmarks/dataset_25000.csv
+benchmarks/dataset_10000.csv
 
 # OS
 Thumbs.db

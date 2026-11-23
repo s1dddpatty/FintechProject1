@@ -1,3 +1,4 @@
+import os
 import io
 import json
 import joblib
@@ -5,6 +6,7 @@ import pandas as pd
 import uuid
 import time
 import shutil
+import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
@@ -32,12 +34,13 @@ class PortfolioScoringService:
         "fico_high": "fico_range_high",
         "loan_term": "term",
         "home_status": "home_ownership",
-        "state": "addr_state"
+        "state": "addr_state",
+        "address_state": "addr_state"
     }
     
     THRESHOLDS = {
-        "low": 0.20,
-        "high": 0.50
+        "low": 0.15,
+        "high": 0.25
     }
 
     def __init__(self):
@@ -85,20 +88,32 @@ class PortfolioScoringService:
             else:
                 self.metadata = {}
 
-    async def score_portfolio(self, file: UploadFile) -> Dict[str, Any]:
+    async def score_portfolio(self, file: Any) -> Dict[str, Any]:
         """Processes an uploaded CSV, runs preprocessing, generates predictions, and computes analytics."""
-        logger.info(f"PortfolioScoringService started processing for file: {file.filename}")
+        filename = getattr(file, "filename", os.path.basename(str(file)) if isinstance(file, (str, Path)) else "portfolio.csv")
+        logger.info(f"PortfolioScoringService started processing for file: {filename}")
         self._cleanup_old_sessions()
         start_time = time.time()
         
-        if not file.filename.endswith(".csv"):
+        if not filename.endswith(".csv"):
             raise HTTPException(status_code=400, detail="Only CSV files are supported.")
             
-        contents = await file.read()
-        try:
-            df = pd.read_csv(io.BytesIO(contents))
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        if hasattr(file, "read"):
+            if asyncio.iscoroutinefunction(file.read):
+                contents = await file.read()
+            else:
+                contents = file.read()
+            try:
+                df = pd.read_csv(io.BytesIO(contents) if isinstance(contents, bytes) else io.StringIO(contents))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        elif isinstance(file, (str, Path)):
+            try:
+                df = pd.read_csv(file)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid file object provided.")
             
         total_rows_uploaded = len(df)
         
@@ -106,6 +121,7 @@ class PortfolioScoringService:
         original_columns = list(df.columns)
         mapped_features = {}
         ignored_columns = []
+        auto_imputed_features = []
         
         # Rename columns based on common mappings (case-insensitive mapping attempt)
         df_cols_lower = {col.lower(): col for col in df.columns}
@@ -120,27 +136,81 @@ class PortfolioScoringService:
         if rename_map:
             df.rename(columns=rename_map, inplace=True)
             
-        # Check required columns
-        missing_cols = [col for col in self.REQUIRED_COLUMNS if col not in df.columns]
+        # Universal Self-Healing Cleaner: String Sanitization
+        def _clean_num(val):
+            if pd.isna(val): return val
+            if isinstance(val, (int, float)): return float(val)
+            s = str(val).strip().replace('$', '').replace(',', '').replace('%', '').strip()
+            try:
+                return float(s)
+            except (ValueError, TypeError):
+                return None
+
+        for num_col in ["loan_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high"]:
+            if num_col in df.columns:
+                df[num_col] = df[num_col].apply(_clean_num)
+
+        # Standardize term strings
+        if "term" in df.columns:
+            def _clean_term(val):
+                if pd.isna(val): return " 36 months"
+                s = str(val).strip()
+                if "60" in s: return " 60 months"
+                return " 36 months"
+            df["term"] = df["term"].apply(_clean_term)
+
+        # Self-Healing Schema Fallbacks: Ensure all Canonical Features exist
+        DEFAULT_FALLBACKS = {
+            "loan_amnt": 10000.0,
+            "int_rate": 12.5,
+            "annual_inc": 60000.0,
+            "fico_range_low": 700.0,
+            "fico_range_high": 704.0,
+            "term": " 36 months",
+            "grade": "C",
+            "home_ownership": "RENT",
+            "addr_state": "CA",
+            "dti": 15.0,
+            "revol_util": 40.0,
+            "purpose": "debt_consolidation"
+        }
+
+        for req_col, default_val in DEFAULT_FALLBACKS.items():
+            if req_col not in df.columns:
+                df[req_col] = default_val
+                auto_imputed_features.append(req_col)
+            else:
+                df[req_col] = df[req_col].fillna(default_val)
+
+        # Synthesize Advanced Financial Features if not present
+        if "fico_score" not in df.columns:
+            df["fico_score"] = ((df["fico_range_low"] + df["fico_range_high"]) / 2.0).round(1)
+
+        if "installment" not in df.columns:
+            # Amortization estimate
+            r = (df["int_rate"] / 100.0) / 12.0
+            r_safe = r.replace(0, 0.0001)
+            t_num = df["term"].astype(str).str.extract(r'(\d+)')[0].astype(float).fillna(36.0)
+            factor = (1.0 + r_safe) ** t_num
+            df["installment"] = ((df["loan_amnt"] * (r_safe * factor)) / (factor - 1.0)).round(2).fillna((df["loan_amnt"] / 36.0).round(2))
+
+        if "installment_to_income" not in df.columns:
+            df["installment_to_income"] = ((df["installment"] * 12.0) / df["annual_inc"].replace(0, 1000.0)).round(4)
+
+        if "loan_to_income" not in df.columns:
+            df["loan_to_income"] = (df["loan_amnt"] / df["annual_inc"].replace(0, 1000.0)).round(4)
+
+        if "grade_ordinal" not in df.columns:
+            grade_map = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+            df["grade_ordinal"] = df["grade"].map(grade_map).fillna(3).astype(int)
+
+        if "credit_history_months" not in df.columns:
+            df["credit_history_months"] = 120.0
         
         # Identify ignored columns
-        for col in df.columns:
+        for col in original_columns:
             if col not in self.REQUIRED_COLUMNS and col not in ["member_id", "id", "_system_id"]:
                 ignored_columns.append(col)
-                
-        if missing_cols:
-            # If missing columns, return validation report instead of attempting inference
-            return {
-                "status": "validation_failed",
-                "dataset_intelligence": {
-                    "columns_detected": original_columns,
-                    "mapped_features": mapped_features,
-                    "missing_required": missing_cols,
-                    "ignored_columns": ignored_columns,
-                    "missing_values": df.isnull().sum().to_dict()
-                },
-                "error_message": "Dataset validation failed. Missing required features."
-            }
 
         if "member_id" in df.columns:
             df["_system_id"] = df["member_id"].astype(str)
@@ -173,7 +243,7 @@ class PortfolioScoringService:
         
         def assign_risk(p):
             if p >= self.THRESHOLDS["high"]: return "High Risk"
-            elif p >= threshold: return "Medium Risk"
+            elif p >= self.THRESHOLDS["low"]: return "Medium Risk"
             else: return "Low Risk"
             
         df["risk_label"] = df["probability_of_default"].apply(assign_risk)
@@ -189,8 +259,8 @@ class PortfolioScoringService:
         low_risk_count = risk_counts.get("Low Risk", 0)
         medium_risk_count = risk_counts.get("Medium Risk", 0)
         
-        # Recommended approval rate (Low + Medium risk)
-        recommended_approval_rate = (low_risk_count + medium_risk_count) / total_rows_uploaded if total_rows_uploaded > 0 else 0.0
+        # Recommended approval rate (Low risk straight-through)
+        recommended_approval_rate = low_risk_count / total_rows_uploaded if total_rows_uploaded > 0 else 0.0
         
         # Grade Distribution
         grade_dist = df["grade"].value_counts().to_dict() if "grade" in df.columns else {}
@@ -211,6 +281,34 @@ class PortfolioScoringService:
         processing_time = time.time() - start_time
         session_id = str(uuid.uuid4())
         
+        # Format scored records for tabular inspection
+        scored_records = []
+        for idx, row in df.iterrows():
+            f_low = row.get("fico_range_low")
+            f_high = row.get("fico_range_high")
+            fico_str = f"{int(float(f_low))}-{int(float(f_high))}" if pd.notna(f_low) and pd.notna(f_high) else "N/A"
+            pd_val = round(float(row["probability_of_default"]), 4)
+            loan_val = float(row.get("loan_amnt", 0.0))
+            el_val = round(loan_val * pd_val * 0.45, 2)
+            
+            scored_records.append({
+                "id": str(row.get("_system_id", f"APP-{idx+1}")),
+                "loan_amnt": loan_val,
+                "int_rate": float(row.get("int_rate", 0.0)),
+                "annual_inc": float(row.get("annual_inc", 0.0)),
+                "term": str(row.get("term", "36 months")).strip(),
+                "grade": str(row.get("grade", "C")),
+                "home_ownership": str(row.get("home_ownership", "RENT")),
+                "addr_state": str(row.get("addr_state", "CA")),
+                "fico": fico_str,
+                "fico_range_low": float(f_low) if pd.notna(f_low) else 670.0,
+                "fico_range_high": float(f_high) if pd.notna(f_high) else 674.0,
+                "probability_of_default": pd_val,
+                "predicted_class": int(row["predicted_class"]),
+                "risk_label": str(row["risk_label"]),
+                "expected_loss": el_val
+            })
+
         # Construct full response payload
         response = {
             "status": "success",
@@ -227,15 +325,18 @@ class PortfolioScoringService:
                 "columns_detected": original_columns,
                 "mapped_features": mapped_features,
                 "missing_required": [],
+                "auto_imputed_features": auto_imputed_features,
                 "ignored_columns": ignored_columns,
                 "missing_values": df.isnull().sum().to_dict()
             },
+            "scored_records": scored_records,
             "executive_kpis": {
                 "total_applications": total_rows_uploaded,
                 "total_requested_funding": total_requested_funding,
                 "average_loan_amount": average_loan_amount,
                 "average_income": average_income,
                 "high_risk_applications": high_risk_count,
+                "medium_risk_applications": medium_risk_count,
                 "low_risk_applications": low_risk_count,
                 "average_pd": average_pd,
                 "recommended_approval_rate": recommended_approval_rate
@@ -275,3 +376,34 @@ class PortfolioScoringService:
         if not csv_path.exists():
             raise HTTPException(status_code=404, detail="Session not found or expired.")
         return csv_path
+
+    def get_tableau_csv_path(self, session_id: str) -> Path:
+        """Generates and returns the path to a Tableau/PowerBI optimized CSV."""
+        session_dir = self.temp_dir / session_id
+        tableau_csv_path = session_dir / "tableau_export.csv"
+        scored_csv_path = session_dir / "scored_portfolio.csv"
+        
+        if not scored_csv_path.exists():
+            raise HTTPException(status_code=404, detail="Session not found or expired.")
+            
+        if not tableau_csv_path.exists():
+            df = pd.read_csv(scored_csv_path)
+            # Add Tableau calculated dimensions and formatted measures
+            tableau_df = pd.DataFrame({
+                "Applicant_ID": df.get("id", df.get("_system_id", [f"APP-{i+1}" for i in range(len(df))])),
+                "Loan_Amount_USD": df.get("loan_amnt", 0.0),
+                "Interest_Rate_Pct": df.get("int_rate", 0.0),
+                "Annual_Income_USD": df.get("annual_inc", 0.0),
+                "Term_Duration": df.get("term", "36 months"),
+                "Credit_Grade": df.get("grade", "C"),
+                "State_Code": df.get("addr_state", "US"),
+                "FICO_Range": df.get("fico_range_low", 670).astype(str) + "-" + df.get("fico_range_high", 674).astype(str),
+                "Probability_Of_Default_PD": (df["probability_of_default"] * 100).round(2),
+                "Risk_Category": df["risk_label"],
+                "Credit_Policy_Decision": df["risk_label"].apply(lambda x: "APPROVED" if x == "Low Risk" else ("CONDITIONAL REVIEW" if x == "Medium Risk" else "DECLINED")),
+                "Loss_Given_Default_LGD": 0.45,
+                "Expected_Loss_USD": (df["loan_amnt"] * df["probability_of_default"] * 0.45).round(2)
+            })
+            tableau_df.to_csv(tableau_csv_path, index=False)
+            
+        return tableau_csv_path

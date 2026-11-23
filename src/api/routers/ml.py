@@ -117,3 +117,19 @@ async def download_portfolio(session_id: str):
     except Exception as e:
         logger.error(f"Failed to download portfolio: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/portfolio/download-tableau/{session_id}")
+async def download_tableau_portfolio(session_id: str):
+    """Downloads a Tableau / PowerBI optimized dataset with dimensions and measures."""
+    try:
+        csv_path = _portfolio_service.get_tableau_csv_path(session_id)
+        return FileResponse(
+            path=csv_path,
+            filename=f"tableau_credit_risk_{session_id[:8]}.csv",
+            media_type="text/csv"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download Tableau portfolio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
