@@ -66,7 +66,9 @@ class UniversalCleaningPipeline:
         
         # Purpose & Employment
         "loan_purpose": "purpose", "reason": "purpose",
-        "employment_length": "emp_length", "job_duration": "emp_length", "employment_years": "emp_length"
+        "employment_length": "emp_length", "job_duration": "emp_length", "employment_years": "emp_length",
+        "work_experience": "emp_length", "experience": "emp_length", "years_employed": "emp_length",
+        "emp_len": "emp_length", "job_years": "emp_length", "work_years": "emp_length", "employment": "emp_length"
     }
 
     GRADE_ORDINAL_MAP = {
@@ -282,6 +284,14 @@ class UniversalCleaningPipeline:
         else:
             df["addr_state"] = df["addr_state"].fillna("CA").astype(str).str.upper().str.strip()
 
+        # Employment Length
+        if "emp_length" not in df.columns:
+            df["emp_length"] = 5.0
+            imputed_features.append("emp_length (Assigned institutional median 5.0 years)")
+        else:
+            median_emp = df["emp_length"].median() if not df["emp_length"].dropna().empty else 5.0
+            df["emp_length"] = df["emp_length"].fillna(median_emp)
+
         # FICO Bounds
         if "fico_range_low" not in df.columns:
             df["fico_range_low"] = 680.0
@@ -380,6 +390,34 @@ class UniversalCleaningPipeline:
             engineered_features["credit_history_months"] = "Benchmark 10-year credit profile maturity (120 months)."
 
         # 6. Canonical Enterprise Schema Partitioning (3 Entities + 1 Solvency Stream)
+        # Defensive schema enforcement: Guarantee every canonical column exists prior to selection
+        DEFAULT_CANONICAL_VALUES = {
+            "id": [f"LNC-{1000000 + i}" for i in range(len(df))],
+            "annual_inc": 65000.0,
+            "emp_length": 5.0,
+            "home_ownership": "RENT",
+            "addr_state": "CA",
+            "fico_score": 682.0,
+            "fico_range_low": 680.0,
+            "fico_range_high": 684.0,
+            "dti": 15.0,
+            "revol_util": 40.0,
+            "credit_history_months": 120.0,
+            "loan_amnt": 10000.0,
+            "term": 36,
+            "int_rate": 13.0,
+            "installment": 336.93,
+            "grade": "C",
+            "grade_ordinal": 3,
+            "purpose": "debt_consolidation",
+            "installment_to_income": 0.0622,
+            "loan_to_income": 0.1538,
+            "loan_status": "UNSCORED"
+        }
+        for col in self.CANONICAL_COLUMNS:
+            if col not in df.columns:
+                df[col] = DEFAULT_CANONICAL_VALUES.get(col, 0.0)
+
         # Select and reorder strictly to the 21 fixed canonical columns
         df_canonical = df[self.CANONICAL_COLUMNS].copy()
 
