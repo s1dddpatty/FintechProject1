@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { 
@@ -21,10 +21,34 @@ export default function DataPipelinePage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStep, setProcessingStep] = useState(1);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [result, setResult] = useState<any>(null);
   const [copied, setCopied] = useState(false);
   const [activeDomainTab, setActiveDomainTab] = useState<DomainKey>('all');
   const [showRawMemo, setShowRawMemo] = useState(false);
+
+  useEffect(() => {
+    let interval: any;
+    let stepTimer: any;
+    if (isProcessing) {
+      setProcessingStep(1);
+      setElapsedSeconds(0);
+      interval = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+      stepTimer = setInterval(() => {
+        setProcessingStep((prev) => (prev < 5 ? prev + 1 : prev));
+      }, 1400);
+    } else {
+      clearInterval(interval);
+      clearInterval(stepTimer);
+    }
+    return () => {
+      clearInterval(interval);
+      clearInterval(stepTimer);
+    };
+  }, [isProcessing]);
 
   const handleProcess = async () => {
     if (!file) return;
@@ -126,16 +150,94 @@ export default function DataPipelinePage() {
 
       {/* Processing State */}
       {isProcessing && (
-        <Card>
-          <CardContent className="pt-6 flex flex-col items-center justify-center p-16 space-y-4">
+        <Card className="border-primary/40 shadow-lg">
+          <CardContent className="pt-6 flex flex-col items-center justify-center p-16 space-y-5">
             <Activity className="w-12 h-12 text-primary animate-pulse" />
-            <h2 className="text-xl font-bold">Executing Universal Data Pipeline...</h2>
-            <div className="w-full max-w-md space-y-2 text-sm text-muted-foreground">
-              <div className="flex justify-between items-center"><span className="flex items-center"><CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" /> Normalizing schema & column aliases</span><span>Done</span></div>
-              <div className="flex justify-between items-center"><span className="flex items-center"><CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" /> Sanitizing currency, term, & percent strings</span><span>Done</span></div>
-              <div className="flex justify-between items-center"><span className="flex items-center"><Activity className="w-4 h-4 mr-2 text-primary animate-spin" /> Synthesizing financial ratios (FICO, PTI, Ordinals)</span><span>Running</span></div>
-              <div className="flex justify-between items-center opacity-70"><span className="flex items-center"><Layers className="w-4 h-4 mr-2 text-emerald-400" /> Partitioning into 3 Entities + 1 Solvency Stream</span><span>Waiting</span></div>
-              <div className="flex justify-between items-center opacity-50"><span className="flex items-center"><Sparkles className="w-4 h-4 mr-2" /> Generating LLM Audit Memorandum</span><span>Waiting</span></div>
+            <div className="text-center">
+              <h2 className="text-xl font-bold">Executing Universal Data Pipeline...</h2>
+              <p className="text-xs text-muted-foreground mt-1">Elapsed: {elapsedSeconds}s • Active self-healing ingestion</p>
+            </div>
+            <div className="w-full max-w-md space-y-3 text-sm">
+              {/* Step 1 */}
+              <div className="flex justify-between items-center">
+                <span className="flex items-center">
+                  {processingStep > 1 ? (
+                    <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" />
+                  ) : (
+                    <Activity className="w-4 h-4 mr-2 text-primary animate-spin" />
+                  )}
+                  Normalizing schema & column aliases
+                </span>
+                <span className={processingStep > 1 ? "text-emerald-500 font-medium" : "text-primary font-medium"}>
+                  {processingStep > 1 ? "Done" : "Running"}
+                </span>
+              </div>
+
+              {/* Step 2 */}
+              <div className="flex justify-between items-center">
+                <span className="flex items-center">
+                  {processingStep > 2 ? (
+                    <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" />
+                  ) : processingStep === 2 ? (
+                    <Activity className="w-4 h-4 mr-2 text-primary animate-spin" />
+                  ) : (
+                    <span className="w-4 h-4 mr-2 rounded-full border border-muted-foreground/30 inline-block" />
+                  )}
+                  Sanitizing currency, term, & percent strings
+                </span>
+                <span className={processingStep > 2 ? "text-emerald-500 font-medium" : processingStep === 2 ? "text-primary font-medium" : "text-muted-foreground"}>
+                  {processingStep > 2 ? "Done" : processingStep === 2 ? "Running" : "Waiting"}
+                </span>
+              </div>
+
+              {/* Step 3 */}
+              <div className="flex justify-between items-center">
+                <span className="flex items-center">
+                  {processingStep > 3 ? (
+                    <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" />
+                  ) : processingStep === 3 ? (
+                    <Activity className="w-4 h-4 mr-2 text-primary animate-spin" />
+                  ) : (
+                    <span className="w-4 h-4 mr-2 rounded-full border border-muted-foreground/30 inline-block" />
+                  )}
+                  Synthesizing financial ratios (FICO, PTI, Ordinals)
+                </span>
+                <span className={processingStep > 3 ? "text-emerald-500 font-medium" : processingStep === 3 ? "text-primary font-medium" : "text-muted-foreground"}>
+                  {processingStep > 3 ? "Done" : processingStep === 3 ? "Running" : "Waiting"}
+                </span>
+              </div>
+
+              {/* Step 4 */}
+              <div className="flex justify-between items-center">
+                <span className="flex items-center">
+                  {processingStep > 4 ? (
+                    <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-500" />
+                  ) : processingStep === 4 ? (
+                    <Activity className="w-4 h-4 mr-2 text-primary animate-spin" />
+                  ) : (
+                    <span className="w-4 h-4 mr-2 rounded-full border border-muted-foreground/30 inline-block" />
+                  )}
+                  Partitioning into 3 Entities + 1 Solvency Stream
+                </span>
+                <span className={processingStep > 4 ? "text-emerald-500 font-medium" : processingStep === 4 ? "text-primary font-medium" : "text-muted-foreground"}>
+                  {processingStep > 4 ? "Done" : processingStep === 4 ? "Running" : "Waiting"}
+                </span>
+              </div>
+
+              {/* Step 5 */}
+              <div className="flex justify-between items-center">
+                <span className="flex items-center">
+                  {processingStep >= 5 ? (
+                    <Sparkles className="w-4 h-4 mr-2 text-emerald-400 animate-spin" />
+                  ) : (
+                    <span className="w-4 h-4 mr-2 rounded-full border border-muted-foreground/30 inline-block" />
+                  )}
+                  Generating Audit Memorandum via Ollama
+                </span>
+                <span className={processingStep >= 5 ? "text-emerald-400 font-semibold" : "text-muted-foreground"}>
+                  {processingStep >= 5 ? "Generating via Llama 3.2..." : "Waiting"}
+                </span>
+              </div>
             </div>
           </CardContent>
         </Card>

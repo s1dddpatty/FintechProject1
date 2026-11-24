@@ -96,46 +96,7 @@ class LLMService:
         status = await self.check_ollama_status()
         resolved_mapping = {}
 
-        # 1. Try LLM-based autonomous schema resolution if Ollama is online
-        if status["available"]:
-            try:
-                import json
-                sample_str = json.dumps(sample_records[:2] if sample_records else [])
-                prompt = f"""
-You are an autonomous schema normalizer for an institutional credit risk pipeline.
-Raw dataset column names: {raw_columns}
-Sample rows: {sample_str}
-
-Available canonical fields:
-{list(canonical_targets.keys())}
-
-Map every raw column to its best canonical equivalent, or "IGNORE" if it does not match.
-Respond ONLY with a valid JSON object in this format:
-{{"mapping": {{"raw_col_name": "canonical_name"}}}}
-"""
-                payload = {
-                    "model": status["active_model"],
-                    "prompt": prompt,
-                    "stream": False,
-                    "format": "json",
-                    "options": {"temperature": 0.1}
-                }
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    res = await client.post(f"{self.base_url}/api/generate", json=payload)
-                    if res.status_code == 200:
-                        llm_out = res.json().get("response", "")
-                        parsed = json.loads(llm_out)
-                        mapping = parsed.get("mapping", {})
-                        for k, v in mapping.items():
-                            if v in canonical_targets and k in raw_columns:
-                                resolved_mapping[k] = v
-                        if resolved_mapping:
-                            logger.info(f"Ollama successfully mapped {len(resolved_mapping)} columns autonomously.")
-                            return resolved_mapping
-            except Exception as e:
-                logger.warning(f"Ollama schema resolution fell back to semantic resolver: {e}")
-
-        # 2. Semantic Token Resolution Fallback (0ms, 100% deterministic & offline)
+        # 1. High-Speed Semantic Token Resolution (0ms, 100% deterministic & offline)
         import re
         for col in raw_columns:
             clean = re.sub(r'[^a-z0-9_]', '', str(col).strip().lower().replace(' ', '_').replace('-', '_'))
@@ -162,7 +123,49 @@ Respond ONLY with a valid JSON object in this format:
             if best_canonical and best_canonical not in resolved_mapping.values():
                 resolved_mapping[col] = best_canonical
 
-        logger.info(f"Semantic schema resolver mapped {len(resolved_mapping)} / {len(raw_columns)} columns.")
+        logger.info(f"Fast semantic resolver mapped {len(resolved_mapping)} / {len(raw_columns)} columns in 0ms.")
+        if len(resolved_mapping) >= min(len(raw_columns), 4):
+            return resolved_mapping
+
+        # 2. Try LLM-based autonomous schema resolution if columns remain unmapped and Ollama is online
+        if status["available"]:
+            try:
+                import json
+                sample_str = json.dumps(sample_records[:2] if sample_records else [])
+                prompt = f"""
+You are an autonomous schema normalizer for an institutional credit risk pipeline.
+Raw dataset column names: {raw_columns}
+Sample rows: {sample_str}
+
+Available canonical fields:
+{list(canonical_targets.keys())}
+
+Map every raw column to its best canonical equivalent, or "IGNORE" if it does not match.
+Respond ONLY with a valid JSON object in this format:
+{{"mapping": {{"raw_col_name": "canonical_name"}}}}
+"""
+                payload = {
+                    "model": status["active_model"],
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": 0.1, "num_predict": 120}
+                }
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    res = await client.post(f"{self.base_url}/api/generate", json=payload)
+                    if res.status_code == 200:
+                        llm_out = res.json().get("response", "")
+                        parsed = json.loads(llm_out)
+                        mapping = parsed.get("mapping", {})
+                        for k, v in mapping.items():
+                            if v in canonical_targets and k in raw_columns and v not in resolved_mapping.values():
+                                resolved_mapping[k] = v
+                        if resolved_mapping:
+                            logger.info(f"Ollama successfully mapped {len(resolved_mapping)} columns autonomously.")
+                            return resolved_mapping
+            except Exception as e:
+                logger.warning(f"Ollama schema resolution fell back to semantic resolver: {e}")
+
         return resolved_mapping
 
     async def generate_pipeline_audit(self, telemetry: dict) -> dict:
@@ -223,7 +226,8 @@ Keep the tone authoritative, quantitative, and concise.
             "stream": False,
             "options": {
                 "temperature": 0.2,
-                "top_p": 0.9
+                "top_p": 0.9,
+                "num_predict": 250
             }
         }
 
