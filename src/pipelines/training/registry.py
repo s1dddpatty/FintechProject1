@@ -9,6 +9,7 @@ from sklearn.metrics import (
     f1_score, roc_auc_score, average_precision_score,
     brier_score_loss, confusion_matrix, roc_curve, precision_recall_curve
 )
+from scipy.stats import ks_2samp
 from src.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,19 @@ class ModelRegistry:
             
         cm = confusion_matrix(y_test, preds)
         
+        # Calculate KS Statistic and Gini Coefficient
+        y_test_arr = np.array(y_test)
+        if probs is not None:
+            default_probs = probs[y_test_arr == 1]
+            non_default_probs = probs[y_test_arr == 0]
+            if len(default_probs) > 0 and len(non_default_probs) > 0:
+                ks_stat = float(ks_2samp(default_probs, non_default_probs).statistic)
+            else:
+                ks_stat = 0.0
+        else:
+            ks_stat = 0.0
+        gini = float(2.0 * roc_auc - 1.0)
+        
         # Calculate ROC and PR curves (downsampled to 40 representative points for lightweight JSON)
         roc_pts = []
         pr_pts = []
@@ -62,6 +76,8 @@ class ModelRegistry:
             "recall": float(recall_score(y_test, preds, zero_division=0)),
             "f1": float(f1_score(y_test, preds, zero_division=0)),
             "roc_auc": roc_auc,
+            "gini_coefficient": gini,
+            "ks_statistic": ks_stat,
             "pr_auc": pr_auc,
             "brier_score": brier,
             "confusion_matrix": cm.tolist(),
