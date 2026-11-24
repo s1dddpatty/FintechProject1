@@ -111,10 +111,65 @@ Feature Engineering
 
 ---
 
-## Quick Start
+## Quick Start (Zero-Configuration: SQLite & Pretrained Models)
+
+Anyone can clone and run the full platform locally within 2 minutes with zero external dependencies (no PostgreSQL or Docker required):
+
+### Option A: Windows 1-Click Launch
+```cmd
+# 1. Clone repository
+git clone https://github.com/s1dddpatty/FintechProject1.git
+cd FintechProject1
+
+# 2. Install Python backend dependencies
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Install Frontend dependencies
+cd frontend && npm install && cd ..
+
+# 4. Double-click or run the master launcher:
+start_platform.bat
+```
+- **Backend API**: `http://127.0.0.1:8000` (Docs: `http://127.0.0.1:8000/docs`)
+- **Frontend Portal**: `http://localhost:3000` (Pipeline: `/pipeline`, Scoring: `/scoring`, Model: `/development`)
+
+### Option B: Linux / macOS / Manual Terminal
+```bash
+# 1. Clone & Setup Python Virtual Environment
+git clone https://github.com/s1dddpatty/FintechProject1.git
+cd FintechProject1
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Start Backend API Server
+uvicorn src.api.main:app --host 127.0.0.1 --port 8000 --reload
+
+# 3. In a second terminal, Start Next.js Frontend
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## Open-Source LLM Architecture (Ollama & Autonomous Fallback)
+
+The platform features a **dual-engine AI audit architecture** for automated dataset transformation auditing:
+
+- **Generative Mode (Local Ollama)**:
+  If you have [Ollama](https://ollama.com) running locally with `llama3.2` (`ollama run llama3.2`), the system autonomously detects it and uses generative inference to draft executive audit memoranda adhering to **BCBS 239** and **SR 11-7** model risk guidelines.
+- **Zero-Dependency Autonomous Mode (Offline Fallback)**:
+  If Ollama is not installed or offline, the platform's **Autonomous Financial Auditor** instantly activates (0ms latency). It deterministically resolves column aliases, enforces schema invariants, and produces a formal regulatory compliance memorandum without requiring any external AI services or API keys.
+
+---
+
+## Advanced Deployment (Docker & PostgreSQL)
 
 ### Docker (Production-Ready)
-To spin up the entire isolated stack including PostgreSQL and the API:
+To spin up the entire isolated container stack including PostgreSQL and the API:
 
 ```bash
 docker-compose up --build -d
@@ -122,18 +177,16 @@ docker-compose up --build -d
 
 Access the API dynamically at `http://localhost:8000/docs`
 
-### Local Development (Recommended)
+### Local Development with PostgreSQL in Docker
 
-Run the PostgreSQL database inside Docker while running the FastAPI backend and Next.js frontend natively for instant hot-reloading and easy debugging.
+Run the PostgreSQL database inside Docker while running the FastAPI backend and Next.js frontend natively:
 
 ```bash
 # 1. Start PostgreSQL in Docker
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
 
 # 2. Run Database Migrations (Native)
-python -m venv .venv
-# On Windows: .\.venv\Scripts\activate
-# On Linux/Mac: source .venv/bin/activate
+source .venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head
 
