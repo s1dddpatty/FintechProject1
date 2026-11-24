@@ -40,6 +40,7 @@ class UniversalCleaningPipeline:
         
         # Annual Income
         "annual_income": "annual_inc", "income": "annual_inc", "salary": "annual_inc", "gross_income": "annual_inc",
+        "income_annum": "annual_inc", "annum_income": "annual_inc",
         
         # Housing / Home Ownership
         "home_status": "home_ownership", "residence_status": "home_ownership", "housing": "home_ownership",
@@ -47,9 +48,10 @@ class UniversalCleaningPipeline:
         # State
         "state": "addr_state", "address_state": "addr_state", "borrower_state": "addr_state", "location": "addr_state",
         
-        # FICO Scores
+        # FICO & Credit Bureau Scores
         "fico_low": "fico_range_low", "fico_score_low": "fico_range_low", "credit_score_low": "fico_range_low", "fico": "fico_range_low",
         "fico_high": "fico_range_high", "fico_score_high": "fico_range_high", "credit_score_high": "fico_range_high",
+        "cibil_score": "fico_score", "cibil": "fico_score", "credit_score": "fico_score", "bureau_score": "fico_score", "risk_score": "fico_score",
         
         # Installment
         "monthly_payment": "installment", "payment": "installment", "monthly_installment": "installment",
@@ -195,6 +197,7 @@ class UniversalCleaningPipeline:
         engineered_features = {}
 
         df = df_raw.copy()
+        df.columns = [str(c).strip() for c in df.columns]
 
         # 2. Autonomous Schema Normalization (LLM + Semantic Matcher)
         sample_records = df.head(3).to_dict(orient="records") if len(df) > 0 else []
@@ -216,6 +219,14 @@ class UniversalCleaningPipeline:
                     norm_cols[col] = clean_name
         df.rename(columns=norm_cols, inplace=True)
 
+        # Single Bureau Score Mapping (e.g. CIBIL, FICO, Bureau Score single scalar value)
+        if "fico_score" in df.columns:
+            df["fico_score"] = df["fico_score"].apply(self._clean_num)
+            if "fico_range_low" not in df.columns or df["fico_range_low"].dropna().empty:
+                df["fico_range_low"] = df["fico_score"] - 2.0
+            if "fico_range_high" not in df.columns or df["fico_range_high"].dropna().empty:
+                df["fico_range_high"] = df["fico_score"] + 2.0
+
         # 3. Universal Type Sanitization
         num_fields_to_clean = ["loan_amnt", "funded_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high", "installment", "dti", "revol_util"]
         for field in num_fields_to_clean:
@@ -224,6 +235,35 @@ class UniversalCleaningPipeline:
                 df[field] = df[field].apply(self._clean_num)
                 post_nulls = df[field].isna().sum()
                 sanitized_columns[field] = f"Parsed currency/percent strings to float ({post_nulls - pre_nulls} unparseable values converted to null)."
+
+        # Currency Parity Normalization (e.g. INR Lakhs/Crores vs USD)
+        if "annual_inc" in df.columns and not df["annual_inc"].dropna().empty:
+            inc_med = df["annual_inc"].dropna().median()
+            if inc_med > 500000.0:
+                scale_factor = 83.0 # Institutional USD/INR parity
+                df["annual_inc"] = (df["annual_inc"] / scale_factor).round(2)
+                if "loan_amnt" in df.columns:
+                    df["loan_amnt"] = (df["loan_amnt"] / scale_factor).round(2)
+                sanitized_columns["currency_scale"] = "Detected non-USD large denomination currency (INR/Lakhs) - normalized to USD parity (83:1)."
+
+        # Dynamic Credit Grade & Risk-Based APR Synthesis
+        if "fico_score" in df.columns and not df["fico_score"].dropna().empty:
+            if "grade" not in df.columns or df["grade"].dropna().empty:
+                def _derive_grade(s):
+                    if pd.isna(s): return 'C'
+                    if s >= 750: return 'A'
+                    if s >= 700: return 'B'
+                    if s >= 660: return 'C'
+                    if s >= 620: return 'D'
+                    if s >= 580: return 'E'
+                    return 'F'
+                df["grade"] = df["fico_score"].apply(_derive_grade)
+                imputed_features.append("grade (Dynamically derived from credit bureau score tiers)")
+
+            if "int_rate" not in df.columns or df["int_rate"].dropna().empty:
+                grade_apr_map = {'A': 7.5, 'B': 10.5, 'C': 13.5, 'D': 16.5, 'E': 20.0, 'F': 24.0, 'G': 28.0}
+                df["int_rate"] = df["grade"].map(grade_apr_map).fillna(13.0)
+                imputed_features.append("int_rate (Dynamically assigned institutional risk-based APR from credit grade)")
 
         if "term" in df.columns:
             df["term"] = df["term"].apply(self._clean_term)

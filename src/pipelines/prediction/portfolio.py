@@ -26,16 +26,33 @@ class PortfolioScoringService:
     
     COMMON_MAPPINGS = {
         "loan_amount": "loan_amnt",
+        "loan_amt": "loan_amnt",
+        "principal": "loan_amnt",
         "funded_amnt": "loan_amnt",
+        "amount": "loan_amnt",
         "interest_rate": "int_rate",
+        "apr": "int_rate",
         "annual_income": "annual_inc",
         "income": "annual_inc",
+        "salary": "annual_inc",
+        "gross_income": "annual_inc",
+        "income_annum": "annual_inc",
+        "annum_income": "annual_inc",
         "fico_low": "fico_range_low",
         "fico_high": "fico_range_high",
+        "cibil_score": "fico_score",
+        "cibil": "fico_score",
+        "credit_score": "fico_score",
+        "bureau_score": "fico_score",
+        "risk_score": "fico_score",
         "loan_term": "term",
+        "duration": "term",
         "home_status": "home_ownership",
         "state": "addr_state",
-        "address_state": "addr_state"
+        "address_state": "addr_state",
+        "employment_length": "emp_length",
+        "work_experience": "emp_length",
+        "loan_purpose": "purpose"
     }
     
     THRESHOLDS = {
@@ -88,21 +105,32 @@ class PortfolioScoringService:
             else:
                 self.metadata = {}
 
-    async def score_portfolio(self, file: Any) -> Dict[str, Any]:
-        """Processes an uploaded CSV, runs preprocessing, generates predictions, and computes analytics."""
-        filename = getattr(file, "filename", os.path.basename(str(file)) if isinstance(file, (str, Path)) else "portfolio.csv")
+    async def score_portfolio(self, file: Any, filename: str = None) -> Dict[str, Any]:
+        """Async entry point for FastAPI compatibility."""
+        if hasattr(file, "read") and asyncio.iscoroutinefunction(file.read):
+            file_data = await file.read()
+            fname = filename or getattr(file, "filename", "portfolio.csv")
+            return self.score_portfolio_sync(file_data, filename=fname)
+        return self.score_portfolio_sync(file, filename=filename)
+
+    def score_portfolio_sync(self, file: Any, filename: str = None) -> Dict[str, Any]:
+        """Synchronously processes an uploaded CSV, runs preprocessing, generates predictions, and computes analytics."""
+        if filename is None:
+            filename = getattr(file, "filename", os.path.basename(str(file)) if isinstance(file, (str, Path)) else "portfolio.csv")
         logger.info(f"PortfolioScoringService started processing for file: {filename}")
         self._cleanup_old_sessions()
         start_time = time.time()
         
-        if not filename.endswith(".csv"):
+        if not str(filename).endswith(".csv"):
             raise HTTPException(status_code=400, detail="Only CSV files are supported.")
             
-        if hasattr(file, "read"):
-            if asyncio.iscoroutinefunction(file.read):
-                contents = await file.read()
-            else:
-                contents = file.read()
+        if isinstance(file, (bytes, bytearray)):
+            try:
+                df = pd.read_csv(io.BytesIO(file))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+        elif hasattr(file, "read"):
+            contents = file.read()
             try:
                 df = pd.read_csv(io.BytesIO(contents) if isinstance(contents, bytes) else io.StringIO(contents))
             except Exception as e:
@@ -118,17 +146,19 @@ class PortfolioScoringService:
         total_rows_uploaded = len(df)
         
         # 1. Schema Detection and Column Mapping
+        # Strip all whitespace from column headers
+        df.columns = [str(c).strip() for c in df.columns]
         original_columns = list(df.columns)
         mapped_features = {}
         ignored_columns = []
         auto_imputed_features = []
         
         # Rename columns based on common mappings (case-insensitive mapping attempt)
-        df_cols_lower = {col.lower(): col for col in df.columns}
+        df_cols_lower = {col.lower().replace(" ", "_").replace("-", "_"): col for col in df.columns}
         rename_map = {}
-        for uploaded_col_lower, original_col_name in df_cols_lower.items():
-            if uploaded_col_lower in self.COMMON_MAPPINGS:
-                target_col = self.COMMON_MAPPINGS[uploaded_col_lower]
+        for uploaded_col_clean, original_col_name in df_cols_lower.items():
+            if uploaded_col_clean in self.COMMON_MAPPINGS:
+                target_col = self.COMMON_MAPPINGS[uploaded_col_clean]
                 if target_col not in df.columns:
                     rename_map[original_col_name] = target_col
                     mapped_features[original_col_name] = target_col
@@ -140,15 +170,48 @@ class PortfolioScoringService:
         def _clean_num(val):
             if pd.isna(val): return val
             if isinstance(val, (int, float)): return float(val)
-            s = str(val).strip().replace('$', '').replace(',', '').replace('%', '').strip()
+            s = str(val).strip().replace('$', '').replace('₹', '').replace(',', '').replace('%', '').strip()
             try:
                 return float(s)
             except (ValueError, TypeError):
                 return None
 
-        for num_col in ["loan_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high", "dti", "revol_util"]:
+        for num_col in ["loan_amnt", "int_rate", "annual_inc", "fico_score", "fico_range_low", "fico_range_high", "dti", "revol_util"]:
             if num_col in df.columns:
                 df[num_col] = df[num_col].apply(_clean_num)
+
+        # Single Bureau Score Mapping (e.g. CIBIL, single scalar FICO)
+        if "fico_score" in df.columns:
+            if "fico_range_low" not in df.columns or df["fico_range_low"].dropna().empty:
+                df["fico_range_low"] = df["fico_score"] - 2.0
+            if "fico_range_high" not in df.columns or df["fico_range_high"].dropna().empty:
+                df["fico_range_high"] = df["fico_score"] + 2.0
+
+        # Currency Parity Normalization (e.g. INR Lakhs/Crores vs USD)
+        if "annual_inc" in df.columns and not df["annual_inc"].dropna().empty:
+            inc_med = df["annual_inc"].dropna().median()
+            if inc_med > 500000.0:
+                scale_factor = 83.0 # Institutional USD/INR parity
+                df["annual_inc"] = (df["annual_inc"] / scale_factor).round(2)
+                if "loan_amnt" in df.columns:
+                    df["loan_amnt"] = (df["loan_amnt"] / scale_factor).round(2)
+
+        # Dynamic Credit Grade & Risk-Based APR Synthesis (if dataset only provides bureau score)
+        if "fico_score" in df.columns and not df["fico_score"].dropna().empty:
+            if "grade" not in df.columns or df["grade"].dropna().empty:
+                def _derive_grade(s):
+                    if pd.isna(s): return 'C'
+                    if s >= 750: return 'A'
+                    if s >= 700: return 'B'
+                    if s >= 660: return 'C'
+                    if s >= 620: return 'D'
+                    if s >= 580: return 'E'
+                    return 'F'
+                df["grade"] = df["fico_score"].apply(_derive_grade)
+
+            if "int_rate" not in df.columns or df["int_rate"].dropna().empty:
+                grade_apr_map = {'A': 7.5, 'B': 10.5, 'C': 13.5, 'D': 16.5, 'E': 20.0, 'F': 24.0, 'G': 28.0}
+                df["int_rate"] = df["grade"].map(grade_apr_map).fillna(13.0)
 
         if "emp_length" in df.columns:
             def _clean_emp(val):
@@ -292,21 +355,22 @@ class PortfolioScoringService:
         processing_time = time.time() - start_time
         session_id = str(uuid.uuid4())
         
-        # Format scored records for tabular inspection
+        # Format scored records for tabular inspection (fast dictionary iteration)
         scored_records = []
-        for idx, row in df.iterrows():
+        records_raw = df.to_dict(orient="records")
+        for idx, row in enumerate(records_raw):
             f_low = row.get("fico_range_low")
             f_high = row.get("fico_range_high")
             fico_str = f"{int(float(f_low))}-{int(float(f_high))}" if pd.notna(f_low) and pd.notna(f_high) else "N/A"
             pd_val = round(float(row["probability_of_default"]), 4)
-            loan_val = float(row.get("loan_amnt", 0.0))
+            loan_val = float(row.get("loan_amnt", 0.0) or 0.0)
             el_val = round(loan_val * pd_val * 0.45, 2)
             
             scored_records.append({
                 "id": str(row.get("_system_id", f"APP-{idx+1}")),
                 "loan_amnt": loan_val,
-                "int_rate": float(row.get("int_rate", 0.0)),
-                "annual_inc": float(row.get("annual_inc", 0.0)),
+                "int_rate": float(row.get("int_rate", 0.0) or 0.0),
+                "annual_inc": float(row.get("annual_inc", 0.0) or 0.0),
                 "term": str(row.get("term", "36 months")).strip(),
                 "grade": str(row.get("grade", "C")),
                 "home_ownership": str(row.get("home_ownership", "RENT")),
