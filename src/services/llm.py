@@ -18,8 +18,28 @@ class LLMService:
 
     async def check_ollama_status(self) -> dict:
         """Checks if local Ollama daemon is reachable and lists available models."""
+        import socket
         try:
-            # Ultra-fast connect check (0.5s) to avoid blocking when daemon is not active
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.05)
+                if s.connect_ex(('127.0.0.1', 11434)) != 0:
+                    return {
+                        "available": False,
+                        "base_url": self.base_url,
+                        "active_model": None,
+                        "available_models": [],
+                        "message": "Ollama daemon offline. To enable local open-source LLM, run: 'ollama run llama3.2'"
+                    }
+        except Exception:
+            return {
+                "available": False,
+                "base_url": self.base_url,
+                "active_model": None,
+                "available_models": [],
+                "message": "Ollama daemon offline."
+            }
+
+        try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(1.0, connect=0.5)) as client:
                 res = await client.get(f"{self.base_url}/api/tags")
                 if res.status_code == 200:
@@ -44,6 +64,105 @@ class LLMService:
             "available_models": [],
             "message": "Ollama daemon offline. To enable local open-source LLM, run: 'ollama run llama3.2'"
         }
+
+    async def resolve_schema_mapping(self, raw_columns: list, sample_records: list = None) -> dict:
+        """
+        Autonomously resolves column mappings from an arbitrary messy dataset
+        to the canonical credit risk schema using local Ollama (if available)
+        or high-accuracy semantic token resolution (when offline).
+        """
+        canonical_targets = {
+            "loan_amnt": ["loan_amount", "loan_amt", "amount", "principal", "requested", "funding", "loan_size"],
+            "int_rate": ["interest_rate", "rate", "apr", "interest", "borrowing_cost"],
+            "term": ["loan_term", "duration", "tenure_months", "months", "term_months", "period"],
+            "annual_inc": ["annual_income", "income", "salary", "earnings", "gross_income", "borrower_income", "pay"],
+            "emp_length": ["employment_length", "work_experience", "job_tenure", "years_employed", "experience", "tenure", "emp_len", "employment"],
+            "home_ownership": ["home_status", "residence", "housing", "property_status", "living_situation"],
+            "addr_state": ["state", "borrower_state", "location", "province", "region"],
+            "fico_range_low": ["fico_low", "fico", "credit_score", "credit_score_low", "bureau_score", "fico_score_low"],
+            "fico_range_high": ["fico_high", "credit_score_high", "bureau_score_high", "fico_score_high"],
+            "dti": ["debt_to_income", "debt_income_ratio", "dti_ratio", "debt_ratio"],
+            "revol_util": ["revolving_utilization", "credit_utilization", "utilization", "card_utilization", "credit_usage"],
+            "grade": ["credit_grade", "risk_grade", "rating", "subgrade", "tier"],
+            "purpose": ["loan_purpose", "reason", "use_of_funds", "category"],
+            "installment": ["monthly_payment", "payment", "installment_amt", "monthly_installment"],
+            "loan_status": ["status", "default", "repayment_status", "performance", "outcome"],
+            "earliest_cr_line": ["first_credit_line", "credit_start", "origination_date"],
+            "issue_d": ["issue_date", "origination_date", "loan_date"],
+            "id": ["application_id", "loan_id", "member_id", "borrower_id", "account_num"]
+        }
+
+        status = await self.check_ollama_status()
+        resolved_mapping = {}
+
+        # 1. Try LLM-based autonomous schema resolution if Ollama is online
+        if status["available"]:
+            try:
+                import json
+                sample_str = json.dumps(sample_records[:2] if sample_records else [])
+                prompt = f"""
+You are an autonomous schema normalizer for an institutional credit risk pipeline.
+Raw dataset column names: {raw_columns}
+Sample rows: {sample_str}
+
+Available canonical fields:
+{list(canonical_targets.keys())}
+
+Map every raw column to its best canonical equivalent, or "IGNORE" if it does not match.
+Respond ONLY with a valid JSON object in this format:
+{{"mapping": {{"raw_col_name": "canonical_name"}}}}
+"""
+                payload = {
+                    "model": status["active_model"],
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": 0.1}
+                }
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    res = await client.post(f"{self.base_url}/api/generate", json=payload)
+                    if res.status_code == 200:
+                        llm_out = res.json().get("response", "")
+                        parsed = json.loads(llm_out)
+                        mapping = parsed.get("mapping", {})
+                        for k, v in mapping.items():
+                            if v in canonical_targets and k in raw_columns:
+                                resolved_mapping[k] = v
+                        if resolved_mapping:
+                            logger.info(f"Ollama successfully mapped {len(resolved_mapping)} columns autonomously.")
+                            return resolved_mapping
+            except Exception as e:
+                logger.warning(f"Ollama schema resolution fell back to semantic resolver: {e}")
+
+        # 2. Semantic Token Resolution Fallback (0ms, 100% deterministic & offline)
+        import re
+        for col in raw_columns:
+            clean = re.sub(r'[^a-z0-9_]', '', str(col).strip().lower().replace(' ', '_').replace('-', '_'))
+            best_canonical = None
+            best_score = 0
+
+            for canonical, keywords in canonical_targets.items():
+                if clean == canonical:
+                    best_canonical = canonical
+                    break
+                for kw in keywords:
+                    if kw == clean:
+                        best_canonical = canonical
+                        best_score = 100
+                        break
+                    elif kw in clean or clean in kw:
+                        score = len(kw) / max(len(clean), 1)
+                        if score > best_score and score > 0.4:
+                            best_score = score
+                            best_canonical = canonical
+                if best_score == 100:
+                    break
+
+            if best_canonical and best_canonical not in resolved_mapping.values():
+                resolved_mapping[col] = best_canonical
+
+        logger.info(f"Semantic schema resolver mapped {len(resolved_mapping)} / {len(raw_columns)} columns.")
+        return resolved_mapping
 
     async def generate_pipeline_audit(self, telemetry: dict) -> dict:
         """

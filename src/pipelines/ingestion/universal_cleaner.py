@@ -196,19 +196,27 @@ class UniversalCleaningPipeline:
 
         df = df_raw.copy()
 
-        # 2. Schema Normalization (Lowercase, trim whitespace, map aliases)
+        # 2. Autonomous Schema Normalization (LLM + Semantic Matcher)
+        sample_records = df.head(3).to_dict(orient="records") if len(df) > 0 else []
+        llm_mapped = await self.llm_service.resolve_schema_mapping(list(df.columns), sample_records)
+        
         norm_cols = {}
         for col in df.columns:
-            clean_name = str(col).strip().lower().replace(" ", "_").replace("-", "_")
-            if clean_name in self.ALIAS_MAP:
-                canonical = self.ALIAS_MAP[clean_name]
+            if col in llm_mapped:
+                canonical = llm_mapped[col]
                 norm_cols[col] = canonical
                 mapped_aliases[col] = canonical
             else:
-                norm_cols[col] = clean_name
+                clean_name = str(col).strip().lower().replace(" ", "_").replace("-", "_")
+                if clean_name in self.ALIAS_MAP:
+                    canonical = self.ALIAS_MAP[clean_name]
+                    norm_cols[col] = canonical
+                    mapped_aliases[col] = canonical
+                else:
+                    norm_cols[col] = clean_name
         df.rename(columns=norm_cols, inplace=True)
 
-        # 3. Type Sanitization
+        # 3. Universal Type Sanitization
         num_fields_to_clean = ["loan_amnt", "funded_amnt", "int_rate", "annual_inc", "fico_range_low", "fico_range_high", "installment", "dti", "revol_util"]
         for field in num_fields_to_clean:
             if field in df.columns:
@@ -238,95 +246,46 @@ class UniversalCleaningPipeline:
             df["revol_util"] = (df["revol_util"] * 100.0).round(2)
             sanitized_columns["revol_util"] = "Normalized decimal fraction revolving utilization to percentage points."
 
-        # 4. Domain-Aware Missing Value Imputation
-        if "loan_amnt" not in df.columns:
-            df["loan_amnt"] = 10000.0
-            imputed_features.append("loan_amnt (Injected median loan size $10,000)")
-        else:
-            median_loan = df["loan_amnt"].median() if not df["loan_amnt"].dropna().empty else 10000.0
-            df["loan_amnt"] = df["loan_amnt"].fillna(median_loan)
+        # 4. Declarative Invariant Schema Specification & Universal Imputation
+        CANONICAL_SPEC = {
+            "annual_inc": {"default": 65000.0, "type": float, "impute": "median", "desc": "gross income $65,000"},
+            "emp_length": {"default": 5.0, "type": float, "impute": "median", "desc": "employment tenure 5.0 years"},
+            "home_ownership": {"default": "RENT", "type": str, "impute": "mode", "desc": "home ownership 'RENT'"},
+            "addr_state": {"default": "CA", "type": str, "impute": "mode", "desc": "geographic baseline 'CA'"},
+            "fico_range_low": {"default": 680.0, "type": float, "impute": "median", "desc": "FICO range low 680.0"},
+            "fico_range_high": {"default": 684.0, "type": float, "impute": "offset_fico", "desc": "FICO range high 684.0"},
+            "dti": {"default": 15.0, "type": float, "impute": "median", "desc": "debt-to-income 15.0%"},
+            "revol_util": {"default": 40.0, "type": float, "impute": "median", "desc": "revolving utilization 40.0%"},
+            "loan_amnt": {"default": 10000.0, "type": float, "impute": "median", "desc": "loan size $10,000"},
+            "term": {"default": 36, "type": int, "impute": "mode", "desc": "tenor 36 months"},
+            "int_rate": {"default": 13.0, "type": float, "impute": "median", "desc": "interest rate 13.0%"},
+            "grade": {"default": "C", "type": str, "impute": "mode", "desc": "credit grade C"},
+            "purpose": {"default": "debt_consolidation", "type": str, "impute": "mode", "desc": "purpose 'debt_consolidation'"},
+            "loan_status": {"default": "UNSCORED", "type": str, "impute": "mode", "desc": "status 'UNSCORED'"}
+        }
 
-        if "int_rate" not in df.columns:
-            df["int_rate"] = 13.0
-            imputed_features.append("int_rate (Injected market median 13.0%)")
-        else:
-            median_rate = df["int_rate"].median() if not df["int_rate"].dropna().empty else 13.0
-            df["int_rate"] = df["int_rate"].fillna(median_rate)
+        for col_name, spec in CANONICAL_SPEC.items():
+            if col_name not in df.columns or df[col_name].dropna().empty:
+                df[col_name] = spec["default"]
+                imputed_features.append(f"{col_name} (Injected domain prior: {spec['desc']})")
+            else:
+                if spec["impute"] == "median":
+                    med_val = df[col_name].median() if not df[col_name].dropna().empty else spec["default"]
+                    df[col_name] = df[col_name].fillna(med_val)
+                elif spec["impute"] == "mode":
+                    mode_val = df[col_name].mode()[0] if not df[col_name].dropna().empty else spec["default"]
+                    df[col_name] = df[col_name].fillna(mode_val)
+                elif spec["impute"] == "offset_fico":
+                    df[col_name] = df[col_name].fillna(df["fico_range_low"] + 4.0)
 
-        if "annual_inc" not in df.columns:
-            df["annual_inc"] = 65000.0
-            imputed_features.append("annual_inc (Injected benchmark income $65,000)")
-        else:
-            median_inc = df["annual_inc"].median() if not df["annual_inc"].dropna().empty else 65000.0
-            df["annual_inc"] = df["annual_inc"].fillna(median_inc)
+        # Standardize string fields
+        df["grade"] = df["grade"].astype(str).str.upper().str.strip()
+        df["home_ownership"] = df["home_ownership"].astype(str).str.upper().str.strip()
+        df["addr_state"] = df["addr_state"].astype(str).str.upper().str.strip()
+        df["purpose"] = df["purpose"].astype(str).str.lower().str.strip()
+        df["term"] = df["term"].astype(int)
 
-        if "term" not in df.columns:
-            df["term"] = 36
-            imputed_features.append("term (Defaulted to standard 36-month tenor)")
-        else:
-            df["term"] = df["term"].fillna(36).astype(int)
-
-        if "grade" not in df.columns:
-            df["grade"] = "C"
-            imputed_features.append("grade (Assigned conservative median Grade C)")
-        else:
-            df["grade"] = df["grade"].fillna("C").astype(str).str.upper().str.strip()
-
-        if "home_ownership" not in df.columns:
-            df["home_ownership"] = "RENT"
-            imputed_features.append("home_ownership (Assigned institutional baseline 'RENT')")
-        else:
-            df["home_ownership"] = df["home_ownership"].fillna("RENT").astype(str).str.upper().str.strip()
-
-        if "addr_state" not in df.columns:
-            df["addr_state"] = "CA"
-            imputed_features.append("addr_state (Assigned high-density geographic baseline 'CA')")
-        else:
-            df["addr_state"] = df["addr_state"].fillna("CA").astype(str).str.upper().str.strip()
-
-        # Employment Length
-        if "emp_length" not in df.columns:
-            df["emp_length"] = 5.0
-            imputed_features.append("emp_length (Assigned institutional median 5.0 years)")
-        else:
-            median_emp = df["emp_length"].median() if not df["emp_length"].dropna().empty else 5.0
-            df["emp_length"] = df["emp_length"].fillna(median_emp)
-
-        # FICO Bounds
-        if "fico_range_low" not in df.columns:
-            df["fico_range_low"] = 680.0
-            imputed_features.append("fico_range_low (Assigned baseline 680.0)")
-        else:
-            df["fico_range_low"] = df["fico_range_low"].fillna(680.0)
-
-        if "fico_range_high" not in df.columns:
-            df["fico_range_high"] = df["fico_range_low"] + 4.0
-            imputed_features.append("fico_range_high (Computed offset from fico_range_low)")
-        else:
-            df["fico_range_high"] = df["fico_range_high"].fillna(df["fico_range_low"] + 4.0)
-
-        # Remaining Bureau Features: DTI & Revolving Utilization
-        if "dti" not in df.columns:
-            df["dti"] = 15.0
-            imputed_features.append("dti (Assigned baseline debt-to-income 15.0%)")
-        else:
-            median_dti = df["dti"].median() if not df["dti"].dropna().empty else 15.0
-            df["dti"] = df["dti"].fillna(median_dti).round(2)
-
-        if "revol_util" not in df.columns:
-            df["revol_util"] = 40.0
-            imputed_features.append("revol_util (Assigned institutional baseline 40.0%)")
-        else:
-            median_util = df["revol_util"].median() if not df["revol_util"].dropna().empty else 40.0
-            df["revol_util"] = df["revol_util"].fillna(median_util).round(2)
-
-        # Remaining Contract Features: Purpose & ID
-        if "purpose" not in df.columns:
-            df["purpose"] = "debt_consolidation"
-            imputed_features.append("purpose (Defaulted to 'debt_consolidation')")
-        else:
-            df["purpose"] = df["purpose"].fillna("debt_consolidation").astype(str).str.lower().str.strip()
-
+        # Primary Key (ID) Invariant
         if "id" not in df.columns:
             df["id"] = [f"LNC-{1000000 + i}" for i in range(len(df))]
         else:
@@ -335,11 +294,7 @@ class UniversalCleaningPipeline:
             if mask.any():
                 df.loc[mask, "id"] = [f"LNC-{1000000 + i}" for i in range(mask.sum())]
 
-        # Solvency & Repayment Status
-        if "loan_status" not in df.columns:
-            df["loan_status"] = "UNSCORED"
-        else:
-            df["loan_status"] = df["loan_status"].fillna("UNSCORED").astype(str).str.strip()
+        df["loan_status"] = df["loan_status"].fillna("UNSCORED").astype(str).str.strip()
 
         # 5. Advanced Financial Feature Engineering
         # Feature A: Credit Score Midpoint (FICO Score)
