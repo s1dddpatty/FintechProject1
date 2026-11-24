@@ -203,21 +203,26 @@ class UniversalCleaningPipeline:
         sample_records = df.head(3).to_dict(orient="records") if len(df) > 0 else []
         llm_mapped = await self.llm_service.resolve_schema_mapping(list(df.columns), sample_records)
         
+        used_targets = set()
         norm_cols = {}
         for col in df.columns:
+            target = None
             if col in llm_mapped:
-                canonical = llm_mapped[col]
-                norm_cols[col] = canonical
-                mapped_aliases[col] = canonical
+                target = llm_mapped[col]
             else:
                 clean_name = str(col).strip().lower().replace(" ", "_").replace("-", "_")
                 if clean_name in self.ALIAS_MAP:
-                    canonical = self.ALIAS_MAP[clean_name]
-                    norm_cols[col] = canonical
-                    mapped_aliases[col] = canonical
-                else:
-                    norm_cols[col] = clean_name
+                    target = self.ALIAS_MAP[clean_name]
+            
+            if target and target not in used_targets:
+                norm_cols[col] = target
+                mapped_aliases[col] = target
+                used_targets.add(target)
+            else:
+                norm_cols[col] = str(col).strip().lower().replace(" ", "_").replace("-", "_")
         df.rename(columns=norm_cols, inplace=True)
+        # Guarantee no duplicate column names exist
+        df = df.loc[:, ~df.columns.duplicated()].copy()
 
         # Single Bureau Score Mapping (e.g. CIBIL, FICO, Bureau Score single scalar value)
         if "fico_score" in df.columns:

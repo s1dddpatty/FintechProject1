@@ -14,7 +14,7 @@ class LLMService:
     def __init__(self):
         self.base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
         self.model = os.getenv("OLLAMA_MODEL", "llama3.2")
-        self.timeout = float(os.getenv("OLLAMA_TIMEOUT", "15.0"))
+        self.timeout = float(os.getenv("OLLAMA_TIMEOUT", "60.0"))
 
     async def check_ollama_status(self) -> dict:
         """Checks if local Ollama daemon is reachable and lists available models."""
@@ -120,7 +120,7 @@ Respond ONLY with a valid JSON object in this format:
                     "format": "json",
                     "options": {"temperature": 0.1}
                 }
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     res = await client.post(f"{self.base_url}/api/generate", json=payload)
                     if res.status_code == 200:
                         llm_out = res.json().get("response", "")

@@ -165,6 +165,7 @@ class PortfolioScoringService:
         
         if rename_map:
             df.rename(columns=rename_map, inplace=True)
+        df = df.loc[:, ~df.columns.duplicated()].copy()
             
         # Universal Self-Healing Cleaner: String Sanitization
         def _clean_num(val):
